@@ -1,0 +1,263 @@
+{
+  "name": "AI Lead Qualification & Sales Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-lead",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook - New Lead",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "webhookId": "ai-lead"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body ?? $json;\nconst name = String(data.name ?? '').trim();\nconst email = String(data.email ?? '').trim().toLowerCase();\nconst company = String(data.company ?? '').trim();\nconst message = String(data.message ?? '').trim();\nconst budget = Number(data.budget ?? 0);\nconst source = String(data.source ?? 'Website').trim() || 'Website';\n\nif (!name) throw new Error('Lead name is required');\nif (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) throw new Error('Valid email is required');\nif (!message) throw new Error('Lead message is required');\nif (!Number.isFinite(budget) || budget < 0) throw new Error('Budget must be a valid non-negative number');\n\nreturn [{ json: { name, email, company, message, budget, source, received_at: new Date().toISOString() } }];"
+      },
+      "id": "2",
+      "name": "Validate Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email": "={{$json.email}}",
+            "Date": "={{$json.received_at}}",
+            "Name": "={{$json.name}}",
+            "Company": "={{$json.company}}",
+            "Message": "={{$json.message}}",
+            "Budget": "={{$json.budget}}",
+            "Source": "={{$json.source}}",
+            "Status": "={{'Duplicate'}}"
+          },
+          "matchingColumns": ["Email"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "3",
+      "name": "Duplicate Check / Upsert CRM",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [480, 0],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"leftValue": "={{$json.Status}}", "rightValue": "Duplicate", "operator": {"type": "string", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "4",
+      "name": "Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [720, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { ...$('Validate Lead').first().json, status: 'Duplicate', message: 'Lead already exists and was not sent for AI qualification.' } }];"
+      },
+      "id": "5",
+      "name": "Duplicate Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, -160]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a B2B sales qualification assistant. Analyze the lead and return ONLY valid JSON with exactly these fields: qualified (boolean), score (number 0-100), priority (high|medium|low), reason (string), service_needed (string), recommended_action (string). Evaluate business intent, budget, clarity, potential value, urgency, and fit for automation services."
+            },
+            {
+              "role": "user",
+              "content": "Name: {{$json.name}}\nEmail: {{$json.email}}\nCompany: {{$json.company}}\nMessage: {{$json.message}}\nBudget: {{$json.budget}}\nSource: {{$json.source}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6",
+      "name": "OpenAI - Qualify Lead",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [960, 80],
+      "credentials": {
+        "openAiApi": {
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Validate Lead').first().json;\nconst raw = $json.message?.content ?? $json.content ?? $json.text ?? '';\nif (!raw) throw new Error('AI response was empty');\nconst cleaned = String(raw).trim().replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/\\s*```$/i, '');\nlet analysis;\ntry { analysis = JSON.parse(cleaned); } catch { throw new Error('AI returned invalid JSON: ' + cleaned); }\nif (typeof analysis.qualified !== 'boolean') throw new Error('AI qualified field must be boolean');\nconst score = Number(analysis.score);\nif (!Number.isFinite(score) || score < 0 || score > 100) throw new Error('AI score must be between 0 and 100');\nconst priority = String(analysis.priority ?? '').toLowerCase();\nif (!['high','medium','low'].includes(priority)) throw new Error('AI priority must be high, medium, or low');\nreturn [{ json: { ...lead, qualified: analysis.qualified, score, priority, reason: String(analysis.reason ?? ''), service_needed: String(analysis.service_needed ?? ''), recommended_action: String(analysis.recommended_action ?? ''), status: analysis.qualified ? 'Qualified' : 'Nurture' } }];"
+      },
+      "id": "7",
+      "name": "Parse & Validate AI Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {"caseSensitive": true, "typeValidation": "strict"},
+          "conditions": [
+            {"leftValue": "={{$json.qualified}}", "rightValue": true, "operator": {"type": "boolean", "operation": "equals"}}
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "8",
+      "name": "Qualified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1440, 80]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "REPLACE_WITH_SLACK_CHANNEL_ID",
+        "text": "🚨 NEW QUALIFIED LEAD\n\nName: {{$json.name}}\nCompany: {{$json.company}}\nEmail: {{$json.email}}\nBudget: ${{$json.budget}}\nScore: {{$json.score}}/100\nPriority: {{$json.priority}}\nService: {{$json.service_needed}}\nAI Reason: {{$json.reason}}\nRecommended Action: {{$json.recommended_action}}"
+      },
+      "id": "9",
+      "name": "Slack - Sales Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1680, -40],
+      "credentials": {
+        "slackApi": {
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toList": "={{$json.email}}",
+        "subject": "=Thanks for contacting us, {{$json.name}}",
+        "message": "=Hi {{$json.name}},\n\nThank you for contacting us.\n\nWe received your request regarding:\n\n{{$json.service_needed}}\n\nOur team will review your requirements and get back to you shortly.\n\nBest regards,\nAI Automation Team"
+      },
+      "id": "10",
+      "name": "Gmail - Qualified Response",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1920, -40],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "toList": "={{$json.email}}",
+        "subject": "=We received your request, {{$json.name}}",
+        "message": "=Hi {{$json.name}},\n\nThank you for reaching out.\n\nWe have received your requirements and will review them. Our team will contact you if there is a suitable next step.\n\nBest regards,\nAI Automation Team"
+      },
+      "id": "11",
+      "name": "Gmail - Nurture Response",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1680, 200],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {"__rl": true, "mode": "id", "value": "REPLACE_WITH_GOOGLE_SHEET_ID"},
+        "sheetName": {"__rl": true, "mode": "name", "value": "Leads"},
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{$json.received_at}}",
+            "Name": "={{$json.name}}",
+            "Email": "={{$json.email}}",
+            "Company": "={{$json.company}}",
+            "Message": "={{$json.message}}",
+            "Budget": "={{$json.budget}}",
+            "Source": "={{$json.source}}",
+            "Qualified": "={{$json.qualified}}",
+            "Score": "={{$json.score}}",
+            "Priority": "={{$json.priority}}",
+            "Service": "={{$json.service_needed}}",
+            "AI Reason": "={{$json.reason}}",
+            "Recommended Action": "={{$json.recommended_action}}",
+            "Status": "={{$json.status}}"
+          },
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "12",
+      "name": "Google Sheets - Store Lead",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [2160, 80],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - New Lead": {"main":[[{"node":"Validate Lead","type":"main","index":0}]]},
+    "Validate Lead": {"main":[[{"node":"Duplicate Check / Upsert CRM","type":"main","index":0}]]},
+    "Duplicate Check / Upsert CRM": {"main":[[{"node":"Duplicate?","type":"main","index":0}]]},
+    "Duplicate?": {"main":[[{"node":"Duplicate Result","type":"main","index":0},{"node":"OpenAI - Qualify Lead","type":"main","index":1}]]},
+    "OpenAI - Qualify Lead": {"main":[[{"node":"Parse & Validate AI Result","type":"main","index":0}]]},
+    "Parse & Validate AI Result": {"main":[[{"node":"Qualified?","type":"main","index":0}]]},
+    "Qualified?": {"main":[[{"node":"Slack - Sales Alert","type":"main","index":0}], [{"node":"Gmail - Nurture Response","type":"main","index":0}]]},
+    "Slack - Sales Alert": {"main":[[{"node":"Gmail - Qualified Response","type":"main","index":0}]]},
+    "Gmail - Qualified Response": {"main":[[{"node":"Google Sheets - Store Lead","type":"main","index":0}]]},
+    "Gmail - Nurture Response": {"main":[[{"node":"Google Sheets - Store Lead","type":"main","index":0}]]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1"},
+  "versionId": "ai-lead-qualification-v1",
+  "meta": {"templateCredsSetupCompleted": false},
+  "tags": []
+}
