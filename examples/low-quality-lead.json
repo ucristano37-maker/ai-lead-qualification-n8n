@@ -1,0 +1,8 @@
+{
+  "name": "Test User",
+  "email": "test@example.com",
+  "company": "Small Project",
+  "message": "I just want to know what automation is.",
+  "budget": 0,
+  "source": "Website"
+}
