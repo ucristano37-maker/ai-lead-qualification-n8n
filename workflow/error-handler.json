@@ -1,0 +1,46 @@
+{
+  "name": "AI Lead Qualification - Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e=$json;\nreturn [{json:{workflow:e.workflow?.name??'Unknown workflow',error:e.execution?.error?.message??e.error?.message??'Unknown error',time:new Date().toISOString(),executionId:e.execution?.id??''}}];"
+      },
+      "id": "error-normalize",
+      "name": "Normalize Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "REPLACE_WITH_SLACK_CHANNEL_ID",
+        "text": "⚠️ AUTOMATION ERROR\n\nWorkflow: {{$json.workflow}}\nError: {{$json.error}}\nTime: {{$json.time}}\nExecution ID: {{$json.executionId}}"
+      },
+      "id": "error-slack",
+      "name": "Slack - Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [480, 0],
+      "credentials": {"slackApi":{"name":"Slack account"}}
+    }
+  ],
+  "connections": {
+    "Error Trigger":{"main":[[{"node":"Normalize Error","type":"main","index":0}]]},
+    "Normalize Error":{"main":[[{"node":"Slack - Error Alert","type":"main","index":0}]]}
+  },
+  "active":false,
+  "settings":{"executionOrder":"v1"},
+  "versionId":"error-handler-v1",
+  "meta":{"templateCredsSetupCompleted":false},
+  "tags":[]
+}
